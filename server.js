@@ -4,6 +4,7 @@ const express = require('express');
 const multer = require('multer');
 const multerS3 = require('multer-s3');
 const { S3Client, GetObjectCommand } = require('@aws-sdk/client-s3');
+const { SQSClient, SendMessageCommand, ReceiveMessageCommand, DeleteMessageCommand } = require('@aws-sdk/client-sqs');
 const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
 
 const app = express();
@@ -18,6 +19,16 @@ const s3Client = new S3Client({
 });
 
 const BUCKET_NAME = process.env.S3_BUCKET_NAME || 'your-bucket-name';
+const SQS_QUEUE_URL = process.env.SQS_QUEUE_URL 
+
+// Configure SQS client
+const sqsClient = new SQSClient({
+  region: process.env.AWS_REGION || 'us-east-1',
+  credentials: process.env.AWS_ACCESS_KEY_ID ? {
+    accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY
+  } : undefined
+});
 
 // Configure multer with S3 storage
 const upload = multer({
@@ -153,6 +164,58 @@ app.get('/videos/:videoId', async (req, res) => {
       videoId: videoId,
       key: key,
       expiresIn: 3600
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// POST /videos/:videoId/process - Send video to worker via SQS
+app.post('/videos/:videoId/process', async (req, res) => {
+  try {
+    const videoId = req.params.videoId;
+    
+    if (!videoId) {
+      return res.status(400).json({ error: 'videoId is required' });
+    }
+
+    // Construct the S3 key
+    const key = videoId.startsWith('videos/') ? videoId : `videos/${videoId}`;
+
+    // Prepare message for SQS
+    const message = {
+      videoId: videoId,
+      s3Key: key,
+      bucket: BUCKET_NAME,
+      timestamp: new Date().toISOString(),
+      action: 'process_video'
+    };
+
+    // Send message to SQS queue
+    console.log('SQS_QUEUE_URL,',`${JSON.stringify(process.env)}`);
+    const command = new SendMessageCommand({
+      QueueUrl: `${process.env.SQS_QUEUE_URL}`,
+      MessageBody: JSON.stringify(message),
+      MessageAttributes: {
+        videoId: {
+          DataType: 'String',
+          StringValue: videoId
+        },
+        action: {
+          DataType: 'String',
+          StringValue: 'process_video'
+        }
+      }
+    });
+
+    const result = await sqsClient.send(command);
+
+    res.json({
+      message: 'Video sent to worker queue',
+      videoId: videoId,
+      s3Key: key,
+      sqsMessageId: result.MessageId,
+      queueUrl: SQS_QUEUE_URL
     });
   } catch (error) {
     res.status(500).json({ error: error.message });

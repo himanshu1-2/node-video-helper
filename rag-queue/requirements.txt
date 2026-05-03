@@ -1,0 +1,13 @@
+fastapi
+uvicorn
+boto3
+yarl
+redis
+rq
+langchain
+langchain-openai
+langchain-qdrant
+openai
+qdrant-client
+python-dotenv
+langchain-text-splitters
